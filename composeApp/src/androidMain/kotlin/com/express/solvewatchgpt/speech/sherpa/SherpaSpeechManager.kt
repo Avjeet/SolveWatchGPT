@@ -25,8 +25,11 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 
+import com.express.solvewatchgpt.network.SpeechSocketClient
+
 class SherpaSpeechManager(
-    private val context: Context
+    private val context: Context,
+    private val socketClient: SpeechSocketClient
 ) : SpeechRecognizerManager {
 
     private val _state = MutableStateFlow(SpeechState())
@@ -39,7 +42,6 @@ class SherpaSpeechManager(
 
     private val scope = CoroutineScope(Dispatchers.IO)
     private var recordingJob: Job? = null
-    private var accumulatedText = ""
     private var lastFinalText = ""
 
     init {
@@ -50,9 +52,26 @@ class SherpaSpeechManager(
         scope.launch {
             try {
                 val modelDir = File(context.filesDir, "sherpa-model")
-                // Force copy to ensure latest assets are used (dev mode)
-                // In production, check version or existence.
-                copyAssets("sherpa-model", modelDir.absolutePath)
+                if (!modelDir.exists()) {
+                    _state.update { it.copy(isDownloading = true, error = null) }
+                    // GitHub Release Asset Link
+                    val modelUrl = "https://github.com/Avjeet/SolveWatchGPT/releases/download/sherpa-model-release/sherpa-model.zip"
+                    
+                    val zipFile = File(context.filesDir, "sherpa-model.zip")
+                    
+                    try {
+                        downloadFile(modelUrl, zipFile)
+                        unzip(zipFile, context.filesDir) // Unzips to filesDir
+                        zipFile.delete() 
+                        _state.update { it.copy(isDownloading = false) }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        _state.update { it.copy(error = "Model download failed. Check internet.", isDownloading = false) }
+                        return@launch
+                    }
+                }
+
+
 
                 val config = OnlineRecognizerConfig(
                     featConfig = com.k2fsa.sherpa.onnx.FeatureConfig(
@@ -70,7 +89,8 @@ class SherpaSpeechManager(
                         tokens = File(modelDir, "tokens.txt").absolutePath,
                         numThreads = 1,
                         debug = true
-                    ), endpointConfig = EndpointConfig() // Use default
+                    ),
+                    endpointConfig = EndpointConfig()
                 )
 
                 recognizer = OnlineRecognizer(
@@ -115,6 +135,23 @@ class SherpaSpeechManager(
             }
             stream = recognizer?.createStream()
 
+            // Connect Socket (Fire and Forget) and listen for responses
+            scope.launch {
+                try {
+                    // Use local network IP for physical device (from logs)
+                    socketClient.connect("192.168.0.106", 4000)
+                } catch (e: Exception) {
+                   e.printStackTrace()
+                }
+            }
+            
+            // Listen for AI responses
+            scope.launch {
+                 socketClient.transcriptions.collect { aiText ->
+                     println("SOCKET_RECEIVED: $aiText")
+                 }
+            }
+
             recordingJob = scope.launch(Dispatchers.IO) {
                 try {
                     val shortBuffer = ShortArray(bufferSize / 2)
@@ -127,6 +164,15 @@ class SherpaSpeechManager(
                                 floatSamples[i] = shortBuffer[i] / 32768.0f
                             }
 
+                            // Calculate Audio Level (RMS) for Visualizer
+                            var sumSq = 0.0
+                            for (sample in floatSamples) {
+                                sumSq += sample * sample
+                            }
+                            val rms = kotlin.math.sqrt(sumSq / floatSamples.size)
+                            // Boost it a bit for visibility
+                            val visualLevel = (rms * 10).coerceIn(0.0, 1.0).toFloat()
+
                             val s = stream ?: break
                             s.acceptWaveform(floatSamples, 16000)
 
@@ -135,17 +181,28 @@ class SherpaSpeechManager(
                             }
 
                             val result = recognizer?.getResult(s)
+                            var currentText = ""
                             if (result != null) {
                                 val text = result.text
                                 if (text.isNotEmpty()) {
                                     val isEndpoint = recognizer?.isEndpoint(s) ?: false
-
                                     if (isEndpoint) {
-                                        lastFinalText += text
+                                        val textToSend = text
+                                        // SEND FINAL TEXT CHUNK TO BACKEND
+                                        socketClient.sendTextChunk(textToSend)
+                                        
                                         recognizer?.reset(s)
                                     }
-                                    _state.update { it.copy(transcription = lastFinalText + text) }
+                                    currentText = lastFinalText + text
                                 }
+                            }
+                            
+                            // Update State with level and text
+                            _state.update { 
+                                it.copy(
+                                    transcription = if (currentText.isNotEmpty()) currentText else it.transcription,
+                                    audioLevel = visualLevel
+                                ) 
                             }
                         }
                     }

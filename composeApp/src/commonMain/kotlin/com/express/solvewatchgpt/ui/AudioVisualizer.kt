@@ -18,6 +18,7 @@ import kotlin.math.sin
 @Composable
 fun AudioVisualizer(
     isListening: Boolean,
+    audioLevel: Float, // 0..1
     modifier: Modifier = Modifier,
     color: Color = AppTheme.Primary
 ) {
@@ -33,10 +34,13 @@ fun AudioVisualizer(
         )
     )
 
-    // Animate amplitude based on listening state
+    // Animate amplitude based on listening state AND audio level
+    // Base amplitude creates a "breathing" effect, plus dynamic level
+    val targetAmp = if (isListening) (10f + (audioLevel * 50f)) else 2f
+    
     val amplitude by animateFloatAsState(
-        targetValue = if (isListening) 50f else 2f,
-        animationSpec = tween(500)
+        targetValue = targetAmp,
+        animationSpec = tween(50) // Fast response
     )
 
     Canvas(modifier = modifier.fillMaxWidth().height(100.dp)) {

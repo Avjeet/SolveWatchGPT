@@ -106,6 +106,7 @@ fun SpeechScreen() {
                 // Visualizer
                 AudioVisualizer(
                     isListening = state.isListening,
+                    audioLevel = state.audioLevel,
                     modifier = Modifier.height(60.dp).fillMaxWidth(0.8f)
                 )
                 
@@ -164,8 +165,17 @@ fun SpeechScreen() {
             onPermissionDenied = {
                 hasPermission = false
                 requestPermissionTrigger = false
-                // Optional: Show snackbar or alert
             }
+        )
+    }
+
+    if (state.isDownloading) {
+        AlertDialog(
+            onDismissRequest = { /* Prevent dismiss */ },
+            title = { Text(text = "Initializing AI") },
+            text = { Text(text = "Downloading high-accuracy speech model (40MB). This happens only once.") },
+            confirmButton = {},
+            dismissButton = {}
         )
     }
 }
