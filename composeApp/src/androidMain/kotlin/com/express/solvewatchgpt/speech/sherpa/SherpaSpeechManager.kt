@@ -234,31 +234,7 @@ class SherpaSpeechManager(
         _state.update { it.copy(isListening = false) }
     }
 
-    // Recursive asset copy
-    private fun copyAssets(path: String, outPath: String) {
-        val assets = context.assets.list(path) ?: return
-        if (assets.isEmpty()) {
-            copyFile(path, outPath)
-        } else {
-            val dir = File(outPath)
-            if (!dir.exists()) dir.mkdirs()
-            for (asset in assets) {
-                copyAssets("$path/$asset", "$outPath/$asset")
-            }
-        }
-    }
 
-    private fun copyFile(inFilename: String, outFilename: String) {
-        try {
-            context.assets.open(inFilename).use { inputStream ->
-                FileOutputStream(outFilename).use { outputStream ->
-                    inputStream.copyTo(outputStream)
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
 
     private fun downloadFile(url: String, destFile: File) {
         try {
