@@ -18,12 +18,12 @@ import org.jetbrains.compose.ui.tooling.preview.Preview
 
 import solvewatchgpt.composeapp.generated.resources.Res
 import solvewatchgpt.composeapp.generated.resources.compose_multiplatform
-import com.express.solvewatchgpt.ui.SpeechScreen
+import com.express.solvewatchgpt.ui.MainScreen
 
 @Composable
 @Preview
 fun App() {
     MaterialTheme {
-        SpeechScreen()
+        MainScreen()
     }
 }

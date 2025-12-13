@@ -76,6 +76,7 @@ sherpa-onnx = { module = "com.k2fsa.sherpa.onnx:sherpa-onnx-aar", version = "1.1
 jna = { module = "net.java.dev.jna:jna", version = "5.13.0" }
 ktor-client-websockets = { module = "io.ktor:ktor-client-websockets", version.ref = "ktor" }
 ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
+commons-compress = { module = "org.apache.commons:commons-compress", version = "1.26.1" }
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }

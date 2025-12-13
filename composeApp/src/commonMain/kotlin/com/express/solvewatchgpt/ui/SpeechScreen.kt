@@ -67,7 +67,7 @@ fun SpeechScreen() {
                     .padding(vertical = 32.dp),
                 contentAlignment = Alignment.Center
             ) {
-                if (state.transcription.isEmpty() && !state.isListening) {
+                if (state.speech.transcription.isEmpty() && !state.speech.isListening) {
                     Text(
                         text = "Tap the microphone to start...",
                         color = AppTheme.OnSurface.copy(alpha = 0.5f),
@@ -75,8 +75,8 @@ fun SpeechScreen() {
                     )
                 } else {
                     Text(
-                        text = state.transcription.ifEmpty { "Listening..." },
-                        color = if (state.transcription.isEmpty()) AppTheme.Primary else AppTheme.OnBackground,
+                        text = state.speech.transcription.ifEmpty { "Listening..." },
+                        color = if (state.speech.transcription.isEmpty()) AppTheme.Primary else AppTheme.OnBackground,
                         fontSize = 24.sp,
                         textAlign = TextAlign.Center,
                         lineHeight = 32.sp
@@ -86,12 +86,12 @@ fun SpeechScreen() {
             
             // Error Message
              AnimatedVisibility(
-                visible = state.error != null,
+                visible = state.speech.error != null,
                 enter = fadeIn(),
                 exit = fadeOut()
             ) {
                 Text(
-                    text = state.error ?: "",
+                    text = state.speech.error ?: "",
                     color = AppTheme.Error,
                     fontSize = 14.sp,
                     modifier = Modifier.padding(bottom = 16.dp)
@@ -105,8 +105,8 @@ fun SpeechScreen() {
             ) {
                 // Visualizer
                 AudioVisualizer(
-                    isListening = state.isListening,
-                    audioLevel = state.audioLevel,
+                    isListening = state.speech.isListening,
+                    audioLevel = state.speech.audioLevel,
                     modifier = Modifier.height(60.dp).fillMaxWidth(0.8f)
                 )
                 
@@ -118,21 +118,21 @@ fun SpeechScreen() {
                     modifier = Modifier
                         .size(80.dp)
                         .shadow(
-                            elevation = if (state.isListening) 20.dp else 4.dp,
+                            elevation = if (state.speech.isListening) 20.dp else 4.dp,
                             shape = CircleShape,
                             spotColor = AppTheme.Primary
                         )
                         .clip(CircleShape)
                         .background(
-                            if (state.isListening) AppTheme.Primary else AppTheme.Surface
+                            if (state.speech.isListening) AppTheme.Primary else AppTheme.Surface
                         )
                         .border(
                             width = 2.dp,
-                            color = if (state.isListening) AppTheme.OnBackground else AppTheme.Primary.copy(alpha = 0.5f),
+                            color = if (state.speech.isListening) AppTheme.OnBackground else AppTheme.Primary.copy(alpha = 0.5f),
                             shape = CircleShape
                         )
                         .clickable {
-                            if (state.isListening) {
+                            if (state.speech.isListening) {
                                 viewModel.stopListening()
                             } else {
                                 if (hasPermission) {
@@ -146,7 +146,7 @@ fun SpeechScreen() {
                     // Create a simple Mic icon using Canvas or Icon if available
                     // For now, a simple ring or text
                     Text(
-                        text = if (state.isListening) "STOP" else "REC",
+                        text = if (state.speech.isListening) "STOP" else "REC",
                         color = Color.White,
                         fontWeight = FontWeight.Bold
                     )
@@ -169,7 +169,7 @@ fun SpeechScreen() {
         )
     }
 
-    if (state.isDownloading) {
+    if (state.speech.isDownloading) {
         AlertDialog(
             onDismissRequest = { /* Prevent dismiss */ },
             title = { Text(text = "Initializing AI") },

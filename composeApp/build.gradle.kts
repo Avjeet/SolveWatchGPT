@@ -31,6 +31,7 @@ kotlin {
             implementation(libs.androidx.activity.compose)
             implementation(libs.koin.android)
             implementation(files("libs/sherpa-onnx.aar"))
+            implementation(libs.commons.compress)
         }
         commonMain.dependencies {
             implementation(compose.runtime)
