@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -27,9 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,7 +42,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.express.solvewatchgpt.model.Answer
 import com.express.solvewatchgpt.speech.SpeechViewModel
-import com.express.solvewatchgpt.ui.permissions.RequestMicrophonePermission
 import org.koin.compose.viewmodel.koinViewModel
 
 @Composable
@@ -53,6 +51,9 @@ fun MainScreen(
     val viewModel = koinViewModel<SpeechViewModel>()
     val state by viewModel.state.collectAsState()
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
+
+    val isSettingsOpen by viewModel.isSettingsOpen.collectAsState()
+    val config by viewModel.config.collectAsState()
 
     androidx.compose.runtime.LaunchedEffect(state.snackbarMessage) {
         state.snackbarMessage?.let { message ->
@@ -92,12 +93,29 @@ fun MainScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "SolveWatch Chat",
-                    color = AppTheme.OnBackground,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "SolveWatch",
+                        color = AppTheme.OnBackground,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    // Settings Button
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .clickable { viewModel.openSettings() }
+                            .background(AppTheme.OnSurface.copy(alpha = 0.05f))
+                            .padding(8.dp)
+                    ) {
+                        // Simple Gear Icon Drawing
+                        androidx.compose.foundation.Canvas(modifier = Modifier.size(16.dp)) {
+                            drawCircle(color = AppTheme.OnSurface, style = Stroke(width = 2f))
+                            drawCircle(color = AppTheme.OnSurface, radius = 2f)
+                        }
+                    }
+                }
 
                 // Connection Toggle
                 Box(
@@ -200,6 +218,16 @@ fun MainScreen(
                 }
             }
         }
+    }
+
+
+
+    if (isSettingsOpen && config != null) {
+        SettingsBottomSheet(
+            config = config!!,
+            onDismiss = viewModel::closeSettings,
+            onSave = viewModel::saveSettings
+        )
     }
 
     if (state.speech.isDownloading) {

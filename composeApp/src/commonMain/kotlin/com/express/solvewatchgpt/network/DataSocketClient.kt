@@ -19,7 +19,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.longOrNull
+
 
 class DataSocketClient(private val client: HttpClient) {
 
@@ -38,7 +38,7 @@ class DataSocketClient(private val client: HttpClient) {
     private val _isConnected = MutableSharedFlow<Boolean>(replay = 1)
     val isConnected: SharedFlow<Boolean> = _isConnected.asSharedFlow()
 
-    suspend fun connect(host: String, port: Int) {
+    suspend fun connect(host: String, port: Int, onError: (String) -> Unit) {
         val urlString = "ws://$host:$port/socket.io/?EIO=4&transport=websocket"
         println("DataSocketClient: Connecting to $urlString")
 
@@ -67,6 +67,7 @@ class DataSocketClient(private val client: HttpClient) {
         } catch (e: Exception) {
             e.printStackTrace()
             _isConnected.emit(false)
+            onError("Socket connection refused")
         }
     }
 
