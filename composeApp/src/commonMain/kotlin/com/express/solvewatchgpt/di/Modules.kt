@@ -1,6 +1,7 @@
 package com.express.solvewatchgpt.di
 
 import com.express.solvewatchgpt.network.DataSocketClient
+import com.express.solvewatchgpt.speech.AudioViewModel
 import com.express.solvewatchgpt.speech.SpeechViewModel
 import org.koin.core.module.Module
 import org.koin.dsl.module
@@ -31,4 +32,5 @@ val sharedModule = module {
     single { SpeechSocketClient(get()) }
     single { DataSocketClient(get()) }
     viewModelOf(::SpeechViewModel)
+    viewModelOf(::AudioViewModel)
 }

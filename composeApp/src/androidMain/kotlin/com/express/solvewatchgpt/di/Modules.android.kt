@@ -7,5 +7,5 @@ import org.koin.android.ext.koin.androidContext
 import com.express.solvewatchgpt.speech.sherpa.SherpaSpeechManager
 
 actual val platformModule = module {
-    single<SpeechRecognizerManager> { SherpaSpeechManager(androidContext(), get()) }
+    single<SpeechRecognizerManager> { SherpaSpeechManager(androidContext()) }
 }

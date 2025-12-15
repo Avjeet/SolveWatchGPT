@@ -7,100 +7,140 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import com.express.solvewatchgpt.speech.SpeechRecognizerManager
 import com.express.solvewatchgpt.speech.SpeechState
-import com.k2fsa.sherpa.onnx.EndpointConfig
-import com.k2fsa.sherpa.onnx.OnlineModelConfig
-import com.k2fsa.sherpa.onnx.OnlineRecognizer
-import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
-import com.k2fsa.sherpa.onnx.OnlineStream
-import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
+import com.k2fsa.sherpa.onnx.OfflineModelConfig
+import com.k2fsa.sherpa.onnx.OfflineRecognizer
+import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
+import com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
+import java.io.BufferedInputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 
-import com.express.solvewatchgpt.network.SpeechSocketClient
 
 class SherpaSpeechManager(
-    private val context: Context,
-    private val socketClient: SpeechSocketClient
+    private val context: Context
 ) : SpeechRecognizerManager {
 
     private val _state = MutableStateFlow(SpeechState())
     override val state: StateFlow<SpeechState> = _state.asStateFlow()
 
-    private var recognizer: OnlineRecognizer? = null
-    private var stream: OnlineStream? = null
+
+    private var recognizer: OfflineRecognizer? = null
     private var audioRecord: AudioRecord? = null
     private var isRecording = false
 
     private val scope = CoroutineScope(Dispatchers.IO)
     private var recordingJob: Job? = null
-    private var lastFinalText = ""
 
-    init {
-        initModel()
-    }
+    // Buffer to hold audio for the entire utterance for Whisper
+    private val audioBuffer = ArrayList<Float>()
 
-    private fun initModel() {
+    override fun initializeModel() {
+        if (recognizer != null) {
+            _state.update { it.copy(isModelReady = true, statusMessage = "Model Ready") }
+            return
+        }
+
         scope.launch {
             try {
-                val modelDir = File(context.filesDir, "sherpa-model")
-                if (!modelDir.exists()) {
-                    _state.update { it.copy(isDownloading = true, error = null) }
-                    // GitHub Release Asset Link
-                    val modelUrl = "https://github.com/Avjeet/SolveWatchGPT/releases/download/sherpa-model-release/sherpa-model.zip"
-                    
-                    val zipFile = File(context.filesDir, "sherpa-model.zip")
-                    
+                _state.update { it.copy(statusMessage = "Checking local files...") }
+
+                val modelDir = File(context.filesDir, "sherpa-onnx-whisper-base.en")
+                val encoderFile = File(modelDir, "base.en-encoder.int8.onnx")
+                val tokensFile = File(modelDir, "base.en-tokens.txt")
+                
+                // If the folder exists but key files are missing, force re-download
+                if (!modelDir.exists() || !encoderFile.exists() || !tokensFile.exists()) {
+                    if (modelDir.exists()) modelDir.deleteRecursively()
+
+                    _state.update {
+                        it.copy(
+                            isDownloading = true,
+                            error = null,
+                            statusMessage = "Downloading Whisper Base (~75MB)..."
+                        )
+                    }
+                    delay(500)
+
+                    // Official K2-FSA Whisper Base Release
+                    val modelUrl =
+                        "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-base.en.tar.bz2"
+                    val tarFile = File(context.filesDir, "whisper-base.tar.bz2")
+
                     try {
-                        downloadFile(modelUrl, zipFile)
-                        unzip(zipFile, context.filesDir) // Unzips to filesDir
-                        zipFile.delete() 
+                        downloadFile(modelUrl, tarFile)
+
+                        _state.update { it.copy(statusMessage = "Extracting files...") }
+                        delay(500)
+
+                        unTarBz2(tarFile, context.filesDir)
+                        tarFile.delete()
                         _state.update { it.copy(isDownloading = false) }
                     } catch (e: Exception) {
                         e.printStackTrace()
-                        _state.update { it.copy(error = "Model download failed. Check internet.", isDownloading = false) }
+                        _state.update {
+                            it.copy(
+                                error = "Model download failed: ${e.message}",
+                                isDownloading = false,
+                                statusMessage = null
+                            )
+                        }
                         return@launch
                     }
                 }
 
+                _state.update { it.copy(statusMessage = "Initializing Whisper Engine...") }
+                delay(500)
 
-
-                val config = OnlineRecognizerConfig(
+                val config = OfflineRecognizerConfig(
                     featConfig = com.k2fsa.sherpa.onnx.FeatureConfig(
                         sampleRate = 16000, featureDim = 80
-                    ), modelConfig = OnlineModelConfig(
-                        transducer = OnlineTransducerModelConfig(
-                            encoder = File(
-                                modelDir, "encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx"
-                            ).absolutePath, decoder = File(
-                                modelDir, "decoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx"
-                            ).absolutePath, joiner = File(
-                                modelDir, "joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx"
-                            ).absolutePath
+                    ),
+                    modelConfig = OfflineModelConfig(
+                        tokens = File(modelDir, "base.en-tokens.txt").absolutePath,
+                        whisper = OfflineWhisperModelConfig(
+                            encoder = File(modelDir, "base.en-encoder.int8.onnx").absolutePath,
+                            decoder = File(modelDir, "base.en-decoder.int8.onnx").absolutePath
                         ),
-                        tokens = File(modelDir, "tokens.txt").absolutePath,
                         numThreads = 1,
                         debug = true
-                    ),
-                    endpointConfig = EndpointConfig()
+                    )
                 )
 
-                recognizer = OnlineRecognizer(
+                recognizer = OfflineRecognizer(
                     assetManager = null, config = config
                 )
 
-                println("Sherpa-ONNX Initialized Successfully")
+                println("Sherpa-ONNX Whisper Initialized Successfully")
+                _state.update {
+                    it.copy(
+                        isModelReady = true,
+                        error = null,
+                        statusMessage = "Ready to Listen"
+                    )
+                }
+                delay(500)
+                _state.update { it.copy(statusMessage = null) } // Clear message after success
             } catch (e: Exception) {
                 e.printStackTrace()
-                _state.update { it.copy(error = "Sherpa Init Error: ${e.message}") }
+                _state.update {
+                    it.copy(
+                        error = "Sherpa Init Error: ${e.message}",
+                        statusMessage = null
+                    )
+                }
             }
         }
     }
@@ -108,10 +148,16 @@ class SherpaSpeechManager(
     @SuppressLint("MissingPermission")
     override fun startListening() {
         if (recognizer == null) {
-            _state.update { it.copy(error = "Sherpa model not loaded yet.") }
+            _state.update { it.copy(error = "Whisper model not loaded yet.") }
             return
         }
         if (isRecording) return
+        
+        // Reset state (keep transcription for append)
+        audioBuffer.clear()
+        _state.update { it.copy(isListening = true, error = null) }
+        
+        val baselineText = _state.value.transcription
 
         try {
             val sampleRate = 16000
@@ -126,35 +172,21 @@ class SherpaSpeechManager(
 
             audioRecord?.startRecording()
             isRecording = true
-            _state.update { it.copy(isListening = true, error = null) }
 
-            // Create New Stream
-            if (stream != null) {
-                stream?.release()
-                stream = null
-            }
-            stream = recognizer?.createStream()
-
-            // Connect Socket (Fire and Forget) and listen for responses
-            scope.launch {
-                try {
-                    // Use local network IP for physical device (from logs)
-                    socketClient.connect("192.168.0.106", 4000)
-                } catch (e: Exception) {
-                   e.printStackTrace()
-                }
-            }
-            
-            // Listen for AI responses
-            scope.launch {
-                 socketClient.transcriptions.collect { aiText ->
-                     println("SOCKET_RECEIVED: $aiText")
-                 }
-            }
+            // Create Stream for this session
+            val stream = recognizer?.createStream()
 
             recordingJob = scope.launch(Dispatchers.IO) {
                 try {
                     val shortBuffer = ShortArray(bufferSize / 2)
+                    
+                    // Smart Decoding State
+                    var timeSinceLastDecodeMs = 0L
+                    var silenceDurationMs = 0L
+                    val silenceThresholdRms = 0.02 // Sensitivity
+                    val maxLatencyMs = 3000L      // Force decode every 3s
+                    val minSilenceDurationMs = 500L // Wait for 0.5s pause
+                    val minIntervalMs = 1000L     // Don't decode more often than 1s
 
                     while (isActive && isRecording) {
                         val read = audioRecord?.read(shortBuffer, 0, shortBuffer.size) ?: 0
@@ -163,55 +195,69 @@ class SherpaSpeechManager(
                             for (i in 0 until read) {
                                 floatSamples[i] = shortBuffer[i] / 32768.0f
                             }
-
-                            // Calculate Audio Level (RMS) for Visualizer
+                            
+                            val chunkDurationMs = (read.toDouble() / sampleRate * 1000).toLong()
+                            timeSinceLastDecodeMs += chunkDurationMs
+                            
+                            // 1. Calculate Visuals & Silence
                             var sumSq = 0.0
                             for (sample in floatSamples) {
                                 sumSq += sample * sample
                             }
                             val rms = kotlin.math.sqrt(sumSq / floatSamples.size)
-                            // Boost it a bit for visibility
                             val visualLevel = (rms * 10).coerceIn(0.0, 1.0).toFloat()
 
-                            val s = stream ?: break
-                            s.acceptWaveform(floatSamples, 16000)
-
-                            while (recognizer?.isReady(s) == true) {
-                                recognizer?.decode(s)
-                            }
-
-                            val result = recognizer?.getResult(s)
-                            var currentText = ""
-                            if (result != null) {
-                                val text = result.text
-                                if (text.isNotEmpty()) {
-                                    val isEndpoint = recognizer?.isEndpoint(s) ?: false
-                                    if (isEndpoint) {
-                                        val textToSend = text
-                                        // SEND FINAL TEXT CHUNK TO BACKEND
-                                        socketClient.sendTextChunk(textToSend)
-                                        
-                                        recognizer?.reset(s)
-                                    }
-                                    currentText = lastFinalText + text
-                                }
-                            }
+                            _state.update { it.copy(audioLevel = visualLevel) }
                             
-                            // Update State with level and text
-                            _state.update { 
-                                it.copy(
-                                    transcription = if (currentText.isNotEmpty()) currentText else it.transcription,
-                                    audioLevel = visualLevel
-                                ) 
+                            if (rms < silenceThresholdRms) {
+                                silenceDurationMs += chunkDurationMs
+                            } else {
+                                silenceDurationMs = 0 // Reset on speech
+                            }
+
+                            // 2. Feed to Whisper Stream
+                            if (stream != null) {
+                                stream.acceptWaveform(floatSamples, sampleRate)
+                                
+                                // Smart Trigger Logic
+                                val isPauseDetected = silenceDurationMs >= minSilenceDurationMs && timeSinceLastDecodeMs >= minIntervalMs
+                                val isBufferFull = timeSinceLastDecodeMs >= maxLatencyMs
+                                
+                                if (isPauseDetected || isBufferFull) {
+                                    recognizer?.decode(stream)
+                                    val result = recognizer?.getResult(stream)
+                                    val text = result?.text ?: ""
+                                    
+                                    if (text.isNotBlank()) {
+                                        val fullText = if (baselineText.isBlank()) text else "$baselineText $text"
+                                        _state.update { it.copy(transcription = fullText) }
+                                    }
+                                    
+                                    timeSinceLastDecodeMs = 0 // Reset timer
+                                    // Don't reset silenceDurationMs completely? 
+                                    // Actually, if we decoded, we effectively handled that pause. 
+                                    // But if silence continues, we might wait for next interval.
+                                }
                             }
                         }
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
+                    _state.update { it.copy(error = "Streaming Error: ${e.message}") }
                 } finally {
                     try {
+                        // Final decode to capture last bit
+                        if (stream != null) {
+                             recognizer?.decode(stream)
+                             val result = recognizer?.getResult(stream)
+                             val text = result?.text ?: ""
+                             if (text.isNotBlank()) {
+                                 val fullText = if (baselineText.isBlank()) text else "$baselineText $text"
+                                 _state.update { it.copy(transcription = fullText) }
+                             }
+                        }
+                        
                         stream?.release()
-                        stream = null
                         audioRecord?.stop()
                         audioRecord?.release()
                     } catch (e: Exception) {
@@ -228,13 +274,11 @@ class SherpaSpeechManager(
     }
 
     override fun stopListening() {
+        if (!isRecording) return
         isRecording = false
-        recordingJob?.cancel()
-        // Resources are cleaned up in the job's finally block
-        _state.update { it.copy(isListening = false) }
+        recordingJob?.cancel() 
+        _state.update { it.copy(isListening = false, audioLevel = 0f) }
     }
-
-
 
     private fun downloadFile(url: String, destFile: File) {
         try {
@@ -250,23 +294,26 @@ class SherpaSpeechManager(
             throw e
         }
     }
-    
-    // Simple Zip extraction (assumes .zip, not .tar.bz2)
-    private fun unzip(zipFile: File, targetDirectory: File) {
-        java.util.zip.ZipInputStream(java.io.FileInputStream(zipFile)).use { zis ->
-            var entry = zis.nextEntry
-            while (entry != null) {
-                val file = File(targetDirectory, entry.name)
-                if (entry.isDirectory) {
-                    file.mkdirs()
-                } else {
-                    file.parentFile?.mkdirs()
-                    FileOutputStream(file).use { fos ->
-                        zis.copyTo(fos)
-                    }
-                }
-                entry = zis.nextEntry
+
+    private fun unTarBz2(tarFile: File, targetDirectory: File) {
+        val fileInputStream = FileInputStream(tarFile)
+        val bufferedInputStream = BufferedInputStream(fileInputStream)
+        val bzip2InputStream = BZip2CompressorInputStream(bufferedInputStream)
+        val tarInputStream = TarArchiveInputStream(bzip2InputStream)
+
+        var entry = tarInputStream.nextEntry
+        while (entry != null) {
+            val outputFile = File(targetDirectory, entry.name)
+            if (entry.isDirectory) {
+                outputFile.mkdirs()
+            } else {
+                outputFile.parentFile?.mkdirs()
+                val outputStream = FileOutputStream(outputFile)
+                tarInputStream.copyTo(outputStream)
+                outputStream.close()
             }
+            entry = tarInputStream.nextEntry
         }
+        tarInputStream.close()
     }
 }

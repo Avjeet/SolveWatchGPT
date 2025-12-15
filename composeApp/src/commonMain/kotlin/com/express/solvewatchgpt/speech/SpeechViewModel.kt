@@ -69,6 +69,10 @@ class SpeechViewModel : ViewModel(), KoinComponent {
         }
     }
 
+    fun initializeModel() {
+        speechManager.initializeModel()
+    }
+
     fun startListening() {
         speechManager.startListening()
     }

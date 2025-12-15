@@ -13,9 +13,7 @@ import platform.Foundation.*
 import platform.Speech.*
 import platform.darwin.NSObject
 
-class IosSpeechRecognizer(
-    private val socketClient: com.express.solvewatchgpt.network.SpeechSocketClient
-) : SpeechRecognizerManager {
+class IosSpeechRecognizer : SpeechRecognizerManager {
 
     private val _state = MutableStateFlow(SpeechState())
     override val state: StateFlow<SpeechState> = _state.asStateFlow()
@@ -27,31 +25,45 @@ class IosSpeechRecognizer(
     
     private val scope = CoroutineScope(Dispatchers.Main)
 
-    override fun startListening() {
+    override fun initializeModel() {
         SFSpeechRecognizer.requestAuthorization { status ->
-             scope.launch {
-                 when (status) {
-                     SFSpeechRecognizerAuthorizationStatus.SFSpeechRecognizerAuthorizationStatusAuthorized -> {
-                         try {
-                             // Connect socket on start just in case (optional, but good for connection check)
-                             launch(Dispatchers.Default) {
-                                 try {
-                                     socketClient.connect("192.168.0.106", 4000)
-                                 } catch (e: Exception) {
-                                     e.printStackTrace()
-                                 }
-                             }
-                             startRecording()
-                         } catch (e: Exception) {
-                             _state.update { it.copy(error = "Recording failed: ${e.message}") }
-                         }
-                     }
-                     else -> {
-                         _state.update { it.copy(error = "Speech recognition not authorized") }
-                     }
-                 }
+             val isAuthorized = status == SFSpeechRecognizerAuthorizationStatus.SFSpeechRecognizerAuthorizationStatusAuthorized
+             if (isAuthorized) {
+                 _state.update { it.copy(isModelReady = true, error = null) }
+             } else {
+                 _state.update { it.copy(isModelReady = false, error = "Speech permission denied") }
              }
         }
+    }
+
+    override fun startListening() {
+        if (!_state.value.isModelReady) {
+             _state.update { it.copy(error = "Model (Permission) not ready") }
+             return
+        }
+        
+        // Assume already authorized if isModelReady is true, but double check in callback normally
+        // For simplicity, we just flow into recording logic which is mostly separate in previous code
+        // But the previous startListening had the auth check inside.
+        // Let's call startRecording directly if ready, or fallback to the old block.
+        // Actually, let's keep the previous valid logic but just add the check.
+        
+        startRecordingSafely()
+    }
+    
+    private fun startRecordingSafely() {
+         // Re-use logic from previous startListening but without the auth request wrapper as that is now in init
+         // OR just call the old logic. The old logic requests auth every time which returns immediately if already granted.
+         // Let's just delegate to the auth-wrapped logical block.
+         SFSpeechRecognizer.requestAuthorization { status -> 
+             scope.launch {
+                 if (status == SFSpeechRecognizerAuthorizationStatus.SFSpeechRecognizerAuthorizationStatusAuthorized) {
+                      try { startRecording() } catch(e: Exception) { _state.update{ it.copy(error = e.message) } }
+                 } else {
+                      _state.update { it.copy(error = "Not authorized") }
+                 }
+             }
+         }
     }
 
     @OptIn(ExperimentalForeignApi::class)
@@ -85,12 +97,7 @@ class IosSpeechRecognizer(
                 isFinal = result.isFinal()
                 _state.update { it.copy(transcription = transcription, isListening = !isFinal) }
                 
-                // If it is final, send to socket
-                if (isFinal && transcription.isNotBlank()) {
-                     scope.launch(Dispatchers.Default) {
-                         socketClient.sendTextChunk(transcription)
-                     }
-                }
+
             }
 
             if (error != null || isFinal) {
