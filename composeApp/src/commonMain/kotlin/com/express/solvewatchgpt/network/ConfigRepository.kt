@@ -10,9 +10,11 @@ import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 
+import com.express.solvewatchgpt.config.AppConfig
+
 class ConfigRepository(private val client: HttpClient) {
 
-    private val BOOT_URL = "http://192.168.0.106:4000" // Should match your WebSocket host
+    private val BOOT_URL = AppConfig.BASE_URL
 
     suspend fun fetchConfig(): ConfigResponse? {
         return try {

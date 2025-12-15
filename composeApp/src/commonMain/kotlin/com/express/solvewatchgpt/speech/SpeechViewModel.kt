@@ -6,6 +6,7 @@ import com.express.solvewatchgpt.model.Answer
 import com.express.solvewatchgpt.model.ApiConfig
 import com.express.solvewatchgpt.network.ConfigRepository
 import com.express.solvewatchgpt.network.DataSocketClient
+import com.express.solvewatchgpt.config.AppConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -82,7 +83,7 @@ class SpeechViewModel : ViewModel(), KoinComponent {
         } else {
             viewModelScope.launch {
                 try {
-                    dataSocketClient.connect("192.168.0.106", 4000) {
+                    dataSocketClient.connect(AppConfig.HOST, AppConfig.PORT) {
                         _snackbarMessage.value = it
                     }
                 } catch (e: Exception) {
