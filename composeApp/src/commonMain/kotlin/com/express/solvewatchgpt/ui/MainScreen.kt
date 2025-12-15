@@ -52,10 +52,19 @@ fun MainScreen(
 ) {
     val viewModel = koinViewModel<SpeechViewModel>()
     val state by viewModel.state.collectAsState()
+    val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
+
+    androidx.compose.runtime.LaunchedEffect(state.snackbarMessage) {
+        state.snackbarMessage?.let { message ->
+            snackbarHostState.showSnackbar(message)
+            viewModel.dismissSnackbar()
+        }
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = AppTheme.Background,
+        snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = {
@@ -74,7 +83,6 @@ fun MainScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Header
             // Header
             Row(
                 modifier = Modifier

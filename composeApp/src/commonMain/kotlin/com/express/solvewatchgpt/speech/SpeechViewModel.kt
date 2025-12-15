@@ -18,7 +18,8 @@ data class MainScreenState(
     val speech: SpeechState = SpeechState(),
     val answers: List<Answer> = emptyList(),
     val expandedAnswerId: String? = null,
-    val isSocketConnected: Boolean = false
+    val isSocketConnected: Boolean = false,
+    val snackbarMessage: String? = null
 )
 
 class SpeechViewModel : ViewModel(), KoinComponent {
@@ -28,14 +29,16 @@ class SpeechViewModel : ViewModel(), KoinComponent {
 
     private val _answers = MutableStateFlow<List<Answer>>(emptyList())
     private val _expandedAnswerId = MutableStateFlow<String?>(null)
+    private val _snackbarMessage = MutableStateFlow<String?>(null)
 
     val state: StateFlow<MainScreenState> = combine(
         speechManager.state,
         _answers,
         _expandedAnswerId,
-        dataSocketClient.isConnected
-    ) { speech, answers, expandedId, isConnected ->
-        MainScreenState(speech, answers, expandedId, isConnected)
+        dataSocketClient.isConnected,
+        _snackbarMessage
+    ) { speech, answers, expandedId, isConnected, snackbarMsg ->
+        MainScreenState(speech, answers, expandedId, isConnected, snackbarMsg)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -51,6 +54,13 @@ class SpeechViewModel : ViewModel(), KoinComponent {
                 }
                 // Auto expand the new answer
                 _expandedAnswerId.value = answer.id
+            }
+        }
+
+        // Collect status messages
+        viewModelScope.launch {
+            dataSocketClient.statusMessages.collect { msg ->
+                _snackbarMessage.value = msg
             }
         }
     }
@@ -86,4 +96,9 @@ class SpeechViewModel : ViewModel(), KoinComponent {
             if (current == id) null else id
         }
     }
+
+    fun dismissSnackbar() {
+        _snackbarMessage.value = null
+    }
 }
+
