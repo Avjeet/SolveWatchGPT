@@ -4,13 +4,30 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -30,7 +47,7 @@ fun SpeechScreen(
 ) {
     val viewModel = koinViewModel<AudioViewModel>()
     val state by viewModel.state.collectAsState()
-    
+
     var hasPermission by remember { mutableStateOf(false) }
     var requestPermissionTrigger by remember { mutableStateOf(false) }
 
@@ -50,19 +67,24 @@ fun SpeechScreen(
                 modifier = Modifier.fillMaxWidth().padding(top = 40.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                 Box(
+                Box(
                     modifier = Modifier
                         .size(40.dp)
                         .clip(CircleShape)
                         .background(AppTheme.Surface)
                         .clickable { onBack() },
                     contentAlignment = Alignment.Center
-                 ) {
-                     Text("<", color = AppTheme.OnBackground, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                 }
-                 
-                 Spacer(modifier = Modifier.width(16.dp))
-                 
+                ) {
+                    Text(
+                        "<",
+                        color = AppTheme.OnBackground,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(16.dp))
+
                 Text(
                     text = "Audio Test (Local)",
                     color = AppTheme.OnBackground,
@@ -70,7 +92,7 @@ fun SpeechScreen(
                     fontWeight = FontWeight.Bold
                 )
             }
-            
+
             Spacer(modifier = Modifier.height(32.dp))
 
             // Error Message Area
@@ -132,7 +154,7 @@ fun SpeechScreen(
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(bottom = 24.dp)
                     )
-                    
+
                     Button(
                         onClick = { viewModel.initializeModel() },
                         colors = ButtonDefaults.buttonColors(
@@ -171,7 +193,7 @@ fun SpeechScreen(
                                 fontSize = 18.sp
                             )
                         } else {
-                             Text(
+                            Text(
                                 text = state.transcription,
                                 color = AppTheme.OnBackground,
                                 fontSize = 20.sp,
@@ -180,58 +202,85 @@ fun SpeechScreen(
                             )
                         }
                     }
-                    
-                    Spacer(modifier = Modifier.height(24.dp))
-                    
-                    // Visualizer
-                    AudioVisualizer(
-                        isListening = state.isListening,
-                        audioLevel = state.audioLevel,
-                        modifier = Modifier.height(60.dp).fillMaxWidth()
-                    )
-                    
-                    Spacer(modifier = Modifier.height(32.dp))
-                    
-                    // Record Button
-                    Box(
-                        contentAlignment = Alignment.Center,
+
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Manual Process Button (Only visible when listening and has text)
+                AnimatedVisibility(
+                    visible = state.isListening && state.transcription.isNotEmpty(),
+                    enter = fadeIn(),
+                    exit = fadeOut()
+                ) {
+                    Button(
+                        onClick = { viewModel.triggerManualProcessing() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AppTheme.Secondary,
+                            contentColor = AppTheme.OnBackground
+                        ),
                         modifier = Modifier
-                            .size(80.dp)
-                            .shadow(
-                                elevation = if (state.isListening) 16.dp else 4.dp,
-                                shape = CircleShape,
-                                spotColor = AppTheme.Primary
-                            )
-                            .clip(CircleShape)
-                            .background(
-                                if (state.isListening) AppTheme.Error else AppTheme.Primary
-                            )
-                            .clickable {
-                                if (state.isListening) {
-                                    viewModel.stopListening()
-                                } else {
-                                    if (hasPermission) {
-                                        viewModel.startListening()
-                                    } else {
-                                        requestPermissionTrigger = true
-                                    }
-                                }
-                            }
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                         Text(
-                            text = if (state.isListening) "STOP" else "REC",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp
+                        Text(
+                            text = "Process & Clear",
+                            fontWeight = FontWeight.Bold
                         )
                     }
-                    
-                    Spacer(modifier = Modifier.height(40.dp))
                 }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Visualizer
+                AudioVisualizer(
+                    isListening = state.isListening,
+                    audioLevel = state.audioLevel,
+                    modifier = Modifier.height(60.dp).fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(32.dp))
+
+                // Record Button
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(80.dp)
+                        .shadow(
+                            elevation = if (state.isListening) 16.dp else 4.dp,
+                            shape = CircleShape,
+                            spotColor = AppTheme.Primary
+                        )
+                        .clip(CircleShape)
+                        .background(
+                            if (state.isListening) AppTheme.Error else AppTheme.Primary
+                        )
+                        .clickable {
+                            if (state.isListening) {
+                                viewModel.stopListening()
+                            } else {
+                                if (hasPermission) {
+                                    viewModel.startListening()
+                                } else {
+                                    requestPermissionTrigger = true
+                                }
+                            }
+                        }
+                ) {
+                    Text(
+                        text = if (state.isListening) "STOP" else "REC",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(40.dp))
             }
         }
     }
-    
+
     // Permission Handling
     if (requestPermissionTrigger) {
         RequestMicrophonePermission(

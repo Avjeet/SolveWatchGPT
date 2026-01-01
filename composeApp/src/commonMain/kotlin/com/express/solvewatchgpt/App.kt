@@ -22,13 +22,8 @@ fun App() {
         var currentScreen by remember { mutableStateOf(Screen.Main) }
 
         when (currentScreen) {
-            Screen.Main -> MainScreen(
-                onNavigateToAudio = { currentScreen = Screen.Audio }
-            )
-
-            Screen.Audio -> SpeechScreen(
-                onBack = { currentScreen = Screen.Main }
-            )
+            Screen.Main -> MainScreen()
+            Screen.Audio -> MainScreen() // Audio screen is now merged, so just stay on Main
         }
     }
 }

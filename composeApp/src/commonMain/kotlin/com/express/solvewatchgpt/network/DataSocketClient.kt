@@ -14,6 +14,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -35,8 +38,8 @@ class DataSocketClient(private val client: HttpClient) {
     // Namespace for Data Updates
     private val NAMESPACE = "/data-updates"
 
-    private val _isConnected = MutableSharedFlow<Boolean>(replay = 1)
-    val isConnected: SharedFlow<Boolean> = _isConnected.asSharedFlow()
+    private val _isConnected = MutableStateFlow<Boolean>(false)
+    val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
     suspend fun connect(host: String, port: Int, onError: (String) -> Unit) {
         val urlString = "ws://$host:$port/socket.io/?EIO=4&transport=websocket"
@@ -118,8 +121,7 @@ class DataSocketClient(private val client: HttpClient) {
                             if (message != null) _statusMessages.emit(message)
 
                             if (response.isNotEmpty()) {
-                                val timestamp = getTimeMillis()
-                                val id = "ans-$timestamp"
+                                val id = payload?.get("messageId")?.jsonPrimitive?.content ?: ""
 
                                 var question = "AI Response"
                                 var answerText = response
@@ -136,7 +138,7 @@ class DataSocketClient(private val client: HttpClient) {
                                     id = id,
                                     question = question,
                                     answer = answerText,
-                                    timestamp = timestamp,
+                                    timestamp = getTimeMillis(),
                                     type = "ai_response"
                                 )
                                 _answers.emit(answer)
@@ -157,6 +159,26 @@ class DataSocketClient(private val client: HttpClient) {
 
     private suspend fun sendPacket(packet: String) {
         session?.send(Frame.Text(packet))
+    }
+
+    suspend fun sendTranscriptionChunk(text: String) {
+        if (session == null) return
+        val jsonPayload = """{"textChunk": "$text"}"""
+        val packet = "42$NAMESPACE,[\"transcription\",$jsonPayload]"
+        sendPacket(packet)
+    }
+
+    suspend fun processTranscription() {
+        if (session == null) return
+        val packet = "42$NAMESPACE,[\"process_transcription\"]"
+        sendPacket(packet)
+    }
+
+    suspend fun emitUsePrompt(promptType: String, messageId: String, screenshotRequired: Boolean) {
+        if (session == null) return
+        val jsonPayload = """{"promptType": "$promptType", "messageId": "$messageId", "screenshotRequired": $screenshotRequired}"""
+        val packet = "42$NAMESPACE,[\"use_prompt\",$jsonPayload]"
+        sendPacket(packet)
     }
 
     fun disconnect() {

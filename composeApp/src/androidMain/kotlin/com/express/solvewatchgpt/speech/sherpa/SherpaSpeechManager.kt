@@ -16,7 +16,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -35,6 +37,9 @@ class SherpaSpeechManager(
 
     private val _state = MutableStateFlow(SpeechState())
     override val state: StateFlow<SpeechState> = _state.asStateFlow()
+
+    private var committedText = ""
+    private var resetRequested = false
 
 
     private var recognizer: OfflineRecognizer? = null
@@ -152,12 +157,15 @@ class SherpaSpeechManager(
             return
         }
         if (isRecording) return
-        
+
         // Reset state (keep transcription for append)
         audioBuffer.clear()
         _state.update { it.copy(isListening = true, error = null) }
-        
-        val baselineText = _state.value.transcription
+
+        _state.update { it.copy(isListening = true, error = null) }
+
+        // Initialize committedText with whatever is currently displayed (or start fresh if that's desired behavior)
+        committedText = _state.value.transcription
 
         try {
             val sampleRate = 16000
@@ -174,12 +182,14 @@ class SherpaSpeechManager(
             isRecording = true
 
             // Create Stream for this session
-            val stream = recognizer?.createStream()
+            var stream = recognizer?.createStream()
 
             recordingJob = scope.launch(Dispatchers.IO) {
                 try {
                     val shortBuffer = ShortArray(bufferSize / 2)
-                    
+                    var lastEmittedText = ""
+                    var lastProcessedIndex = 0
+
                     // Smart Decoding State
                     var timeSinceLastDecodeMs = 0L
                     var silenceDurationMs = 0L
@@ -195,10 +205,10 @@ class SherpaSpeechManager(
                             for (i in 0 until read) {
                                 floatSamples[i] = shortBuffer[i] / 32768.0f
                             }
-                            
+
                             val chunkDurationMs = (read.toDouble() / sampleRate * 1000).toLong()
                             timeSinceLastDecodeMs += chunkDurationMs
-                            
+
                             // 1. Calculate Visuals & Silence
                             var sumSq = 0.0
                             for (sample in floatSamples) {
@@ -208,7 +218,7 @@ class SherpaSpeechManager(
                             val visualLevel = (rms * 10).coerceIn(0.0, 1.0).toFloat()
 
                             _state.update { it.copy(audioLevel = visualLevel) }
-                            
+
                             if (rms < silenceThresholdRms) {
                                 silenceDurationMs += chunkDurationMs
                             } else {
@@ -217,26 +227,37 @@ class SherpaSpeechManager(
 
                             // 2. Feed to Whisper Stream
                             if (stream != null) {
-                                stream.acceptWaveform(floatSamples, sampleRate)
-                                
+                                stream?.acceptWaveform(floatSamples, sampleRate)
+
                                 // Smart Trigger Logic
-                                val isPauseDetected = silenceDurationMs >= minSilenceDurationMs && timeSinceLastDecodeMs >= minIntervalMs
+                                val isPauseDetected =
+                                    silenceDurationMs >= minSilenceDurationMs && timeSinceLastDecodeMs >= minIntervalMs
                                 val isBufferFull = timeSinceLastDecodeMs >= maxLatencyMs
-                                
-                                if (isPauseDetected || isBufferFull) {
-                                    recognizer?.decode(stream)
-                                    val result = recognizer?.getResult(stream)
+
+                                if ((isPauseDetected || isBufferFull) && !resetRequested) {
+                                    recognizer?.decode(stream!!)
+                                    val result = recognizer?.getResult(stream!!)
                                     val text = result?.text ?: ""
-                                    
-                                    if (text.isNotBlank()) {
-                                        val fullText = if (baselineText.isBlank()) text else "$baselineText $text"
+
+                                    // Filter out noise tokens like [Buzzing], [static], (Video)
+                                    val sanitizedText = text.replace(Regex("\\[.*?\\]"), "")
+                                                            .replace(Regex("\\(.*?\\)"), "")
+                                                            .trim()
+
+                                    if (sanitizedText.isNotBlank()) {
+                                        val fullText = if (committedText.isBlank()) sanitizedText else "$committedText $sanitizedText"
                                         _state.update { it.copy(transcription = fullText) }
                                     }
-                                    
+
+
                                     timeSinceLastDecodeMs = 0 // Reset timer
-                                    // Don't reset silenceDurationMs completely? 
-                                    // Actually, if we decoded, we effectively handled that pause. 
-                                    // But if silence continues, we might wait for next interval.
+                                }
+
+                                if (resetRequested) {
+                                    stream?.release()
+                                    stream = recognizer?.createStream()
+                                    // committedText is already reset by the function
+                                    resetRequested = false
                                 }
                             }
                         }
@@ -248,15 +269,20 @@ class SherpaSpeechManager(
                     try {
                         // Final decode to capture last bit
                         if (stream != null) {
-                             recognizer?.decode(stream)
-                             val result = recognizer?.getResult(stream)
-                             val text = result?.text ?: ""
-                             if (text.isNotBlank()) {
-                                 val fullText = if (baselineText.isBlank()) text else "$baselineText $text"
-                                 _state.update { it.copy(transcription = fullText) }
-                             }
+                            recognizer?.decode(stream!!)
+                            val result = recognizer?.getResult(stream!!)
+                            val text = result?.text ?: ""
+                            
+                            val sanitizedText = text.replace(Regex("\\[.*?\\]"), "")
+                                                    .replace(Regex("\\(.*?\\)"), "")
+                                                    .trim()
+
+                            if (sanitizedText.isNotBlank()) {
+                                val fullText = if (committedText.isBlank()) sanitizedText else "$committedText $sanitizedText"
+                                _state.update { it.copy(transcription = fullText) }
+                            }
                         }
-                        
+
                         stream?.release()
                         audioRecord?.stop()
                         audioRecord?.release()
@@ -276,8 +302,9 @@ class SherpaSpeechManager(
     override fun stopListening() {
         if (!isRecording) return
         isRecording = false
-        recordingJob?.cancel() 
-        _state.update { it.copy(isListening = false, audioLevel = 0f) }
+        recordingJob?.cancel()
+        committedText = ""
+        _state.update { it.copy(isListening = false, audioLevel = 0f, transcription = "") }
     }
 
     private fun downloadFile(url: String, destFile: File) {
@@ -315,5 +342,10 @@ class SherpaSpeechManager(
             entry = tarInputStream.nextEntry
         }
         tarInputStream.close()
+    }
+    override fun clearTranscription() {
+        committedText = ""
+        _state.update { it.copy(transcription = "") }
+        resetRequested = true
     }
 }

@@ -1,14 +1,12 @@
 package com.express.solvewatchgpt.ui
 
-import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,20 +16,28 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -40,20 +46,32 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.express.solvewatchgpt.model.Answer
+import com.express.solvewatchgpt.speech.ChatMessage
 import com.express.solvewatchgpt.speech.SpeechViewModel
+import com.express.solvewatchgpt.ui.permissions.RequestMicrophonePermission
 import org.koin.compose.viewmodel.koinViewModel
 
 @Composable
-fun MainScreen(
-    onNavigateToAudio: () -> Unit
-) {
+
+
+fun MainScreen() {
     val viewModel = koinViewModel<SpeechViewModel>()
     val state by viewModel.state.collectAsState()
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
 
     val isSettingsOpen by viewModel.isSettingsOpen.collectAsState()
     val config by viewModel.config.collectAsState()
+
+    var hasPermission by remember { mutableStateOf(false) }
+    var requestPermissionTrigger by remember { mutableStateOf(false) }
+
+    val listState = rememberLazyListState()
+
+    androidx.compose.runtime.LaunchedEffect(state.messages.size) {
+        if (state.messages.isNotEmpty()) {
+            listState.animateScrollToItem(state.messages.size - 1)
+        }
+    }
 
     androidx.compose.runtime.LaunchedEffect(state.snackbarMessage) {
         state.snackbarMessage?.let { message ->
@@ -66,16 +84,23 @@ fun MainScreen(
         modifier = Modifier.fillMaxSize(),
         containerColor = AppTheme.Background,
         snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = {
-                    onNavigateToAudio()
-                },
-                containerColor = AppTheme.Primary,
-                contentColor = Color.White
-            ) {
-                // Mic Icon (Simple shape drawing)
-                MicIcon(color = Color.White, modifier = Modifier.size(24.dp))
+        bottomBar = {
+            if (state.speech.isModelReady) {
+                // Minimized Audio Player Interface
+                AudioBottomBar(
+                    state = state.speech,
+                    isSocketConnected = state.isSocketConnected,
+                    onStartListening = {
+                        if (hasPermission) {
+                            viewModel.startListening()
+                        } else {
+                            requestPermissionTrigger = true
+                        }
+                    },
+                    onStopListening = viewModel::stopListening,
+                    onProcess = viewModel::triggerManualProcessing,
+                    onClear = viewModel::clearTranscription
+                )
             }
         }
     ) { padding ->
@@ -175,21 +200,13 @@ fun MainScreen(
                 }
             }
 
-            // Transcription Preview (Debugging/Feedback)
-            if (state.speech.transcription.isNotEmpty()) {
-                Text(
-                    text = state.speech.transcription,
-                    color = AppTheme.OnSurface.copy(alpha = 0.7f),
-                    fontSize = 12.sp,
-                    lineHeight = 16.sp,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 4.dp)
-                )
-            }
+            // Removed Transcription Preview from top
+            // Removed Error Display from top to avoid clutter, errors will be in bottom bar or toast ideally
+            // Keeping critical connection error if needed but standardizing on bottom bar status.
 
-            // Answers List
+            // Chat Messages List
             LazyColumn(
+                state = listState,
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
@@ -197,24 +214,28 @@ fun MainScreen(
                     start = 16.dp,
                     end = 16.dp,
                     top = 8.dp,
-                    bottom = 88.dp
+                    bottom = 16.dp
                 ),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                reverseLayout = false // Normal top-down layout
             ) {
-                if (state.answers.isEmpty()) {
+                if (state.messages.isEmpty()) {
                     item {
                         EmptyStateMessage()
                     }
                 }
 
-                items(state.answers, key = { it.id }) { answer ->
-                    // For a chat-like feel, maybe different card style?
-                    // Keeping AnswerCard for now but it can be enhanced.
-                    AnswerCard(
-                        answer = answer,
-                        isExpanded = state.expandedAnswerId == answer.id,
-                        onClick = { viewModel.toggleAnswer(answer.id) }
-                    )
+                // Show messages in reverse chronological order if we want latest at bottom, 
+                // but usually the list is stored old->new. 
+                // Let's assume list is Old -> New. We want New at bottom.
+                // We should use keys.
+
+                items(state.messages) { message ->
+                    ChatBubble(message = message, onClick = {
+                        if (!message.isUser) { // Only allow clicking AI messages
+                            viewModel.openMessageOptions(message.id)
+                        }
+                    })
                 }
             }
         }
@@ -230,6 +251,22 @@ fun MainScreen(
         )
     }
 
+
+    // Permission Handling
+    if (requestPermissionTrigger) {
+        RequestMicrophonePermission(
+            onPermissionGranted = {
+                hasPermission = true
+                requestPermissionTrigger = false
+                viewModel.startListening()
+            },
+            onPermissionDenied = {
+                hasPermission = false
+                requestPermissionTrigger = false
+            }
+        )
+    }
+
     if (state.speech.isDownloading) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { /* Prevent dismiss */ },
@@ -237,6 +274,190 @@ fun MainScreen(
             text = { Text(text = "Downloading high-accuracy speech model (40MB). This happens only once.") },
             confirmButton = {},
             dismissButton = {}
+        )
+    }
+
+    if (state.isOptionsDialogOpen) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = viewModel::closeMessageOptions,
+            title = { Text("Select Option") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { viewModel.sendPromptOption("debug") },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = AppTheme.Primary)
+                    ) {
+                        Text("Debug (with Snapshot)", color = Color.White)
+                    }
+                    Button(
+                        onClick = { viewModel.sendPromptOption("theory") },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = AppTheme.Surface)
+                    ) {
+                        Text("Theory", color = AppTheme.OnSurface)
+                    }
+                    Button(
+                        onClick = { viewModel.sendPromptOption("coding") },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = AppTheme.Surface)
+                    ) {
+                        Text("Coding")
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = viewModel::closeMessageOptions) {
+                    Text("Cancel", color = AppTheme.OnSurface)
+                }
+            }
+        )
+    }
+}
+
+@Composable
+
+fun AudioBottomBar(
+    state: com.express.solvewatchgpt.speech.SpeechState,
+    isSocketConnected: Boolean,
+    onStartListening: () -> Unit,
+    onStopListening: () -> Unit,
+    onProcess: () -> Unit,
+    onClear: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(AppTheme.Surface)
+            .shadow(
+                elevation = 8.dp,
+                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+            )
+            .padding(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Bottom, // Align bottom for multi-line text
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Cancel Button (X) - Only if text exists
+            if (state.transcription.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(AppTheme.Error.copy(alpha = 0.1f))
+                        .clickable(onClick = onClear),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("✕", color = AppTheme.Error, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            // Input Text Display
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(AppTheme.Background)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .height(IntrinsicSize.Min)
+            ) {
+                if (state.transcription.isEmpty()) {
+                    Text(
+                        text = if (state.isListening) "Listening..." else "Tap Mic to speak",
+                        color = AppTheme.OnSurface.copy(alpha = 0.4f),
+                        fontSize = 16.sp
+                    )
+                } else {
+                    Text(
+                        text = state.transcription,
+                        color = AppTheme.OnBackground,
+                        fontSize = 16.sp
+                    )
+                }
+            }
+
+            // Mic Button (Toggle)
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (state.isListening) AppTheme.Error.copy(alpha = 0.1f) else AppTheme.Primary.copy(
+                            alpha = 0.1f
+                        )
+                    )
+                    .clickable {
+                        if (state.isListening) onStopListening() else onStartListening()
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                // Mic Icon needs to be drawn or text
+                if (state.isListening) {
+                    // Stop Square
+                    Box(
+                        modifier = Modifier.size(16.dp)
+                            .background(AppTheme.Error, RoundedCornerShape(4.dp))
+                    )
+                } else {
+                    MicIcon(color = AppTheme.Primary, modifier = Modifier.size(24.dp))
+                }
+            }
+
+            // Send Button - Only if text exists
+            if (state.transcription.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(AppTheme.Primary)
+                        .clickable(onClick = onProcess),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("➜", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ChatBubble(message: ChatMessage, onClick: () -> Unit) {
+    val isUser = message.isUser
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
+    ) {
+        Box(
+            modifier = Modifier
+                .widthIn(max = 280.dp)
+                .clip(
+                    RoundedCornerShape(
+                        topStart = 16.dp,
+                        topEnd = 16.dp,
+                        bottomStart = if (isUser) 16.dp else 4.dp,
+                        bottomEnd = if (isUser) 4.dp else 16.dp
+                    )
+                )
+                .background(if (isUser) AppTheme.Primary else AppTheme.Surface)
+                .clickable { onClick() }
+                .padding(12.dp)
+        ) {
+            Text(
+                text = message.text,
+                color = if (isUser) Color.White else AppTheme.OnSurface.copy(alpha = 0.9f),
+                fontSize = 16.sp,
+                lineHeight = 22.sp
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = if (isUser) "You" else "PC",
+            fontSize = 10.sp,
+            color = AppTheme.OnSurface.copy(alpha = 0.4f),
+            modifier = Modifier.padding(horizontal = 4.dp)
         )
     }
 }
@@ -277,68 +498,6 @@ fun MicIcon(modifier: Modifier = Modifier, color: Color) {
     }
 }
 
-@Composable
-fun AnswerCard(
-    answer: Answer,
-    isExpanded: Boolean,
-    onClick: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(AppTheme.Surface)
-            .border(
-                width = 1.dp,
-                color = if (isExpanded) AppTheme.Primary else AppTheme.OnSurface.copy(alpha = 0.1f),
-                shape = RoundedCornerShape(16.dp)
-            )
-            .clickable(onClick = onClick)
-            .animateContentSize(
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioLowBouncy,
-                    stiffness = Spring.StiffnessLow
-                )
-            )
-            .padding(16.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Top
-        ) {
-            Text(
-                text = answer.question,
-                color = AppTheme.OnBackground,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f).padding(end = 8.dp),
-                maxLines = if (isExpanded) Int.MAX_VALUE else 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-            )
-
-            ArrowIcon(isExpanded = isExpanded)
-        }
-
-        if (isExpanded) {
-            Spacer(modifier = Modifier.height(12.dp))
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .background(AppTheme.OnSurface.copy(alpha = 0.1f))
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Text(
-                text = answer.answer,
-                color = AppTheme.OnSurface.copy(alpha = 0.9f),
-                fontSize = 14.sp,
-                lineHeight = 22.sp
-            )
-        }
-    }
-}
 
 @Composable
 fun EmptyStateMessage() {

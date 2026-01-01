@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.StateFlow
 
 interface SpeechRecognizerManager {
     val state: StateFlow<SpeechState>
+    fun clearTranscription()
     fun initializeModel()
     fun startListening()
     fun stopListening()

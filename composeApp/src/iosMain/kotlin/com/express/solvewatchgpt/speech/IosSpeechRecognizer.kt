@@ -4,6 +4,9 @@ import kotlinx.cinterop.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -17,6 +20,8 @@ class IosSpeechRecognizer : SpeechRecognizerManager {
 
     private val _state = MutableStateFlow(SpeechState())
     override val state: StateFlow<SpeechState> = _state.asStateFlow()
+
+
 
     private val speechRecognizer = SFSpeechRecognizer(NSLocale(localeIdentifier = "en-US"))
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest? = null
@@ -66,12 +71,18 @@ class IosSpeechRecognizer : SpeechRecognizerManager {
          }
     }
 
+    // Track the committed text to "subtract" it from the continuous stream
+    private var committedTextPrefix = ""
+
     @OptIn(ExperimentalForeignApi::class)
     private fun startRecording() {
         if (recognitionTask != null) {
             recognitionTask?.cancel()
             recognitionTask = null
         }
+        
+        // Reset prefix on new recording session
+        committedTextPrefix = ""
 
         val audioSession = AVAudioSession.sharedInstance()
         try {
@@ -93,11 +104,25 @@ class IosSpeechRecognizer : SpeechRecognizerManager {
             var isFinal = false
 
             if (result != null) {
-                val transcription = result.bestTranscription.formattedString
+                val fullTranscription = result.bestTranscription.formattedString // Continuous string
                 isFinal = result.isFinal()
-                _state.update { it.copy(transcription = transcription, isListening = !isFinal) }
                 
+                // Calculate display text by removing the committed prefix.
+                // Using startsWith logic to be safe, though indices are usually stable in append-only.
+                // SFSpeech might stabilize/change earlier text, so simple substring is risky but works for visual "clearing".
+                // Better heuristic: if full string starts with committed prefix, strip it. 
+                // If not (re-correction happened), try to find best overlap or just show full.
+                
+                var verificationText = fullTranscription
+                if (committedTextPrefix.isNotEmpty() && verificationText.startsWith(committedTextPrefix)) {
+                    verificationText = verificationText.removePrefix(committedTextPrefix).trim()
+                } else if (committedTextPrefix.isNotEmpty()) {
+                     // Fallback: if earlier words changed, just try to strip what we can or reset
+                     // For simplicity in this "hack", we won't try complex diffing. 
+                     // Usually SFSpeech stabilizes fast.
+                }
 
+                _state.update { it.copy(transcription = verificationText, isListening = !isFinal) }
             }
 
             if (error != null || isFinal) {
@@ -115,6 +140,7 @@ class IosSpeechRecognizer : SpeechRecognizerManager {
         }
 
         val recordingFormat = inputNode.outputFormatForBus(0u)
+        
         inputNode.installTapOnBus(0u, bufferSize = 1024u, format = recordingFormat) { buffer, _ ->
             buffer?.let { request.appendAudioPCMBuffer(it) }
         }
@@ -133,7 +159,26 @@ class IosSpeechRecognizer : SpeechRecognizerManager {
         if (audioEngine.isRunning()) {
             audioEngine.stop()
             recognitionRequest?.endAudio()
-            _state.update { it.copy(isListening = false) }
+            _state.update { it.copy(isListening = false, transcription = "") }
         }
+    }
+    
+    override fun clearTranscription() {
+        // Instead of restarting, we just commit the current full text as a "prefix" to hide.
+        // We need to capture the *current full transcription* from the running task somehow.
+        // Since we don't store it in a var, we can deduce it: 
+        // displayedText = full - committed
+        // => full = committed + displayedText
+        // newCommitted = full
+        
+        val currentDisplayed = _state.value.transcription
+        if (currentDisplayed.isNotEmpty()) {
+            val space = if (committedTextPrefix.isNotEmpty()) " " else ""
+            committedTextPrefix += space + currentDisplayed
+            // Remove double spaces if any
+             committedTextPrefix = committedTextPrefix.trim()
+        }
+        
+        _state.update { it.copy(transcription = "") }
     }
 }

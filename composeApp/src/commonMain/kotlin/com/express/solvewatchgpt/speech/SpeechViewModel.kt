@@ -7,23 +7,33 @@ import com.express.solvewatchgpt.model.ApiConfig
 import com.express.solvewatchgpt.network.ConfigRepository
 import com.express.solvewatchgpt.network.DataSocketClient
 import com.express.solvewatchgpt.config.AppConfig
+import kotlinx.datetime.Clock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 
+data class ChatMessage(
+    val id: String,
+    val text: String,
+    val isUser: Boolean,
+    val timestamp: Long
+)
+
 data class MainScreenState(
     val speech: SpeechState = SpeechState(),
-    val answers: List<Answer> = emptyList(),
-    val expandedAnswerId: String? = null,
+    val messages: List<ChatMessage> = emptyList(),
     val isSocketConnected: Boolean = false,
-    val snackbarMessage: String? = null
+    val snackbarMessage: String? = null,
+    val selectedMessageId: String? = null,
+    val isOptionsDialogOpen: Boolean = false
 )
 
 class SpeechViewModel : ViewModel(), KoinComponent {
@@ -32,9 +42,10 @@ class SpeechViewModel : ViewModel(), KoinComponent {
     private val dataSocketClient: DataSocketClient by inject()
     private val configRepository: ConfigRepository by inject()
 
-    private val _answers = MutableStateFlow<List<Answer>>(emptyList())
-    private val _expandedAnswerId = MutableStateFlow<String?>(null)
+    private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     private val _snackbarMessage = MutableStateFlow<String?>(null)
+    private val _selectedMessageId = MutableStateFlow<String?>(null)
+    private val _isOptionsDialogOpen = MutableStateFlow(false)
     
     // Separate state for settings
     private val _isSettingsOpen = MutableStateFlow(false)
@@ -45,12 +56,20 @@ class SpeechViewModel : ViewModel(), KoinComponent {
 
     val state: StateFlow<MainScreenState> = combine(
         speechManager.state,
-        _answers,
-        _expandedAnswerId,
+        _messages,
         dataSocketClient.isConnected,
-        _snackbarMessage
-    ) { speech, answers, expandedId, isConnected, snackbarMsg ->
-        MainScreenState(speech, answers, expandedId, isConnected, snackbarMsg)
+        _snackbarMessage,
+        _selectedMessageId,
+        _isOptionsDialogOpen
+    ) { args ->
+        val speech = args[0] as SpeechState
+        val messages = args[1] as List<ChatMessage>
+        val isConnected = args[2] as Boolean
+        val snackbarMsg = args[3] as String?
+        val selectedId = args[4] as String?
+        val isDialogOpen = args[5] as Boolean
+
+        MainScreenState(speech, messages, isConnected, snackbarMsg, selectedId, isDialogOpen)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -58,14 +77,21 @@ class SpeechViewModel : ViewModel(), KoinComponent {
     )
 
     init {
+        // Initialize Speech Model automatically on startup
+        speechManager.initializeModel()
+
         // Collect new answers
         viewModelScope.launch {
             dataSocketClient.answers.collect { answer ->
-                _answers.update { currentList ->
-                    listOf(answer) + currentList
+                val aiMessage = ChatMessage(
+                    id = answer.id,
+                    text = answer.answer,
+                    isUser = false,
+                    timestamp = answer.timestamp
+                )
+                _messages.update { currentList ->
+                    currentList + aiMessage
                 }
-                // Auto expand the new answer
-                _expandedAnswerId.value = answer.id
             }
         }
 
@@ -134,9 +160,15 @@ class SpeechViewModel : ViewModel(), KoinComponent {
         }
     }
 
-    fun initializeModel() {
-        speechManager.initializeModel()
+
+
+
+
+    fun dismissSnackbar() {
+        _snackbarMessage.value = null
     }
+    
+    // --- Audio Control Methods (Moved from AudioViewModel) ---
 
     fun startListening() {
         speechManager.startListening()
@@ -145,15 +177,79 @@ class SpeechViewModel : ViewModel(), KoinComponent {
     fun stopListening() {
         speechManager.stopListening()
     }
+    
+    fun triggerManualProcessing() {
+        viewModelScope.launch {
+            val currentTranscription = speechManager.state.value.transcription
+            if (dataSocketClient.isConnected.value && currentTranscription.isNotBlank()) {
+                val textToProcess = currentTranscription
+                println("SpeechViewModel: Manually triggering processing for text: '$textToProcess'")
+                
+                // Add user message locally immediately
+                val userMessage = ChatMessage(
+                    id = "msg_" + (0..100000).random().toString(), // Simple random ID
+                    text = textToProcess,
+                    isUser = true,
+                    timestamp = 0L // Placeholder
+                )
+                _messages.update { it + userMessage }
 
-    fun toggleAnswer(id: String) {
-        _expandedAnswerId.update { current ->
-            if (current == id) null else id
+                // 1. Send the full accumulated text as one chunk
+                dataSocketClient.sendTranscriptionChunk(textToProcess)
+                
+                // 2. Clear local buffer immediately so user can continue speaking
+                speechManager.clearTranscription()
+                
+                // 3. Trigger processing on server
+                dataSocketClient.processTranscription()
+            }
         }
     }
+    
+    fun clearTranscription() {
+        speechManager.clearTranscription()
+    }
 
-    fun dismissSnackbar() {
-        _snackbarMessage.value = null
+    fun openMessageOptions(messageId: String) {
+        _selectedMessageId.value = messageId
+        _isOptionsDialogOpen.value = true
+    }
+
+    fun closeMessageOptions() {
+        _isOptionsDialogOpen.value = false
+        _selectedMessageId.value = null
+    }
+
+    fun sendPromptOption(promptType: String) {
+        val messageId = _selectedMessageId.value
+        if (messageId != null && dataSocketClient.isConnected.value) {
+            viewModelScope.launch {
+                // Determine if screenshot is required based on prompt type (as per requirements)
+                // debug - ss required
+                // theory - ss not required
+                // coding - ss not required
+                val screenshotRequired = promptType == "debug"
+                
+                // Add Chat Message for UI feedback
+                val commandText = "${promptType.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }} ${if (screenshotRequired) "(Snapshot)" else ""}"
+                
+                val userMessage = ChatMessage(
+                    id = "cmd_" + (0..100000).random().toString(),
+                    text = commandText,
+                    isUser = true,
+                    timestamp = 0L
+                )
+                _messages.update { it + userMessage }
+
+                // Emit Socket Event
+                dataSocketClient.emitUsePrompt(promptType, messageId, screenshotRequired)
+                
+                closeMessageOptions()
+            }
+        } else {
+            closeMessageOptions()
+            _snackbarMessage.value = "Cannot send command (Disconnected or No Message ID)"
+        }
     }
 }
 
